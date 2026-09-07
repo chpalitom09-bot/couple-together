@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Morpion — À Deux</title>
+<meta name="theme-color" content="#171225">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a class="icon-btn" href="index.html" id="btn-back"></a>
+    <div class="turn-tag" id="turn-tag">—</div>
+  </div>
+  <h1>Morpion</h1>
+  <div class="board-status" id="status">Chargement...</div>
+
+  <div class="morpion-grid" id="grid"></div>
+
+  <button class="btn btn-ghost" id="btn-reset">Nouvelle partie</button>
+</div>
+
+<script type="module">
+import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, updateDoc, onSnapshot } from "./firebase.js";
+import { icon } from "./icons.js";
+import { startDiceDuel } from "./dice.js";
+
+document.getElementById("btn-back").innerHTML = icon("arrowLeft");
+const $ = (id) => document.getElementById(id);
+
+const LINES = [
+  [0,1,2],[3,4,5],[6,7,8],
+  [0,3,6],[1,4,7],[2,5,8],
+  [0,4,8],[2,4,6]
+];
+
+let gameRef, myRole, unsubGame, diceOpen = false;
+
+function emptyGame() {
+  return { board: Array(9).fill(null), turn: null, status: "dice", diceRoll: { a: null, b: null }, winner: null, winLine: null };
+}
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  const userSnap = await getDoc(doc(db, "users", user.uid));
+  const userData = userSnap.data();
+  if (!userData || !userData.coupleId) { window.location.href = "index.html"; return; }
+  const coupleSnap = await getDoc(doc(db, "couples", userData.coupleId));
+  const couple = coupleSnap.data();
+  myRole = couple.roles[user.uid];
+
+  gameRef = doc(db, "couples", userData.coupleId, "games", "morpion");
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) await setDoc(gameRef, emptyGame());
+
+  unsubGame = onSnapshot(gameRef, (snap) => render(snap.data()));
+});
+
+function render(g) {
+  if (!g) return;
+
+  if (g.status === "dice") {
+    $("status").textContent = "En attente du lancer de dé.";
+    $("turn-tag").textContent = "—";
+    $("grid").innerHTML = "";
+    if (!diceOpen) {
+      diceOpen = true;
+      startDiceDuel(gameRef, myRole, async (starter) => {
+        diceOpen = false;
+        await updateDoc(gameRef, { status: "playing", turn: starter });
+      });
+    }
+    return;
+  }
+
+  const otherRole = myRole === "a" ? "b" : "a";
+  $("grid").innerHTML = g.board.map((v, i) => {
+    const isWin = g.winLine && g.winLine.includes(i);
+    const cls = ["morpion-cell", v ? v : "", isWin ? "win" : ""].filter(Boolean).join(" ");
+    return `<div class="${cls}" data-i="${i}">${v === "a" ? "×" : v === "b" ? "○" : ""}</div>`;
+  }).join("");
+
+  document.querySelectorAll(".morpion-cell").forEach(cell => {
+    cell.onclick = () => play(parseInt(cell.dataset.i, 10), g);
+  });
+
+  if (g.status === "finished") {
+    if (g.winner === "tie") $("status").textContent = "Match nul.";
+    else $("status").textContent = g.winner === myRole ? "Tu as gagné !" : "Ton/ta partenaire a gagné.";
+    $("turn-tag").className = "turn-tag";
+    $("turn-tag").textContent = "Terminé";
+  } else {
+    $("status").textContent = "";
+    const mine = g.turn === myRole;
+    $("turn-tag").className = "turn-tag " + (mine ? "mine" : "theirs");
+    $("turn-tag").textContent = mine ? "Ton tour" : "Son tour";
+  }
+}
+
+async function play(i, g) {
+  if (g.status !== "playing" || g.turn !== myRole || g.board[i]) return;
+  const board = [...g.board];
+  board[i] = myRole;
+
+  let winner = null, winLine = null;
+  for (const line of LINES) {
+    const [a, b, c] = line;
+    if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+      winner = board[a];
+      winLine = line;
+    }
+  }
+  const isFull = board.every(Boolean);
+  const status = winner || isFull ? "finished" : "playing";
+  const finalWinner = winner || (isFull ? "tie" : null);
+
+  await updateDoc(gameRef, {
+    board,
+    turn: myRole === "a" ? "b" : "a",
+    status,
+    winner: finalWinner,
+    winLine
+  });
+}
+
+$("btn-reset").onclick = async () => {
+  await updateDoc(gameRef, emptyGame());
+};
+</script>
+</body>
+</html>

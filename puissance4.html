@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Puissance 4 — À Deux</title>
+<meta name="theme-color" content="#171225">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a class="icon-btn" href="index.html" id="btn-back"></a>
+    <div class="turn-tag" id="turn-tag">—</div>
+  </div>
+  <h1>Puissance 4</h1>
+  <div class="board-status" id="status">Chargement...</div>
+
+  <div class="p4-board" id="board"></div>
+
+  <button class="btn btn-ghost" id="btn-reset">Nouvelle partie</button>
+</div>
+
+<script type="module">
+import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, updateDoc, onSnapshot } from "./firebase.js";
+import { icon } from "./icons.js";
+import { startDiceDuel } from "./dice.js";
+
+document.getElementById("btn-back").innerHTML = icon("arrowLeft");
+const $ = (id) => document.getElementById(id);
+
+const ROWS = 6, COLS = 7;
+
+function emptyGame() {
+  return { board: Array(ROWS * COLS).fill(null), turn: null, status: "dice", diceRoll: { a: null, b: null }, winner: null, winCells: null };
+}
+
+function idx(r, c) { return r * COLS + c; }
+
+let gameRef, myRole, diceOpen = false;
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  const userSnap = await getDoc(doc(db, "users", user.uid));
+  const userData = userSnap.data();
+  if (!userData || !userData.coupleId) { window.location.href = "index.html"; return; }
+  const coupleSnap = await getDoc(doc(db, "couples", userData.coupleId));
+  const couple = coupleSnap.data();
+  myRole = couple.roles[user.uid];
+
+  gameRef = doc(db, "couples", userData.coupleId, "games", "puissance4");
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) await setDoc(gameRef, emptyGame());
+
+  onSnapshot(gameRef, (snap) => render(snap.data()));
+});
+
+function render(g) {
+  if (!g) return;
+
+  if (g.status === "dice") {
+    $("status").textContent = "En attente du lancer de dé.";
+    $("turn-tag").textContent = "—";
+    $("board").innerHTML = "";
+    if (!diceOpen) {
+      diceOpen = true;
+      startDiceDuel(gameRef, myRole, async (starter) => {
+        diceOpen = false;
+        await updateDoc(gameRef, { status: "playing", turn: starter });
+      });
+    }
+    return;
+  }
+
+  $("board").innerHTML = "";
+  for (let c = 0; c < COLS; c++) {
+    const col = document.createElement("div");
+    col.className = "p4-col";
+    col.dataset.c = c;
+    for (let r = 0; r < ROWS; r++) {
+      const v = g.board[idx(r, c)];
+      const winCell = g.winCells && g.winCells.includes(idx(r, c));
+      const cell = document.createElement("div");
+      cell.className = "p4-cell " + (v || "") + (winCell ? " win" : "");
+      col.appendChild(cell);
+    }
+    col.onclick = () => play(c, g);
+    $("board").appendChild(col);
+  }
+
+  if (g.status === "finished") {
+    $("status").textContent = g.winner === "tie" ? "Match nul." : (g.winner === myRole ? "Tu as gagné !" : "Ton/ta partenaire a gagné.");
+    $("turn-tag").className = "turn-tag";
+    $("turn-tag").textContent = "Terminé";
+  } else {
+    $("status").textContent = "";
+    const mine = g.turn === myRole;
+    $("turn-tag").className = "turn-tag " + (mine ? "mine" : "theirs");
+    $("turn-tag").textContent = mine ? "Ton tour" : "Son tour";
+  }
+}
+
+function checkWin(board, role) {
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (board[idx(r,c)] !== role) continue;
+      for (const [dr, dc] of dirs) {
+        const cells = [0,1,2,3].map(k => [r + dr*k, c + dc*k]);
+        if (cells.every(([rr,cc]) => rr>=0 && rr<ROWS && cc>=0 && cc<COLS && board[idx(rr,cc)] === role)) {
+          return cells.map(([rr,cc]) => idx(rr,cc));
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function play(c, g) {
+  if (g.status !== "playing" || g.turn !== myRole) return;
+  let targetRow = -1;
+  for (let r = 0; r < ROWS; r++) {
+    if (!g.board[idx(r, c)]) { targetRow = r; break; }
+  }
+  if (targetRow === -1) return;
+
+  const board = [...g.board];
+  board[idx(targetRow, c)] = myRole;
+
+  const winCells = checkWin(board, myRole);
+  const isFull = board.every(Boolean);
+  const status = winCells || isFull ? "finished" : "playing";
+  const winner = winCells ? myRole : (isFull ? "tie" : null);
+
+  await updateDoc(gameRef, {
+    board,
+    turn: myRole === "a" ? "b" : "a",
+    status,
+    winner,
+    winCells: winCells || null
+  });
+}
+
+$("btn-reset").onclick = async () => { await updateDoc(gameRef, emptyGame()); };
+</script>
+</body>
+</html>

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ballons empoisonnés — À Deux</title>
+<meta name="theme-color" content="#171225">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a class="icon-btn" href="index.html" id="btn-back"></a>
+    <div class="turn-tag" id="turn-tag">—</div>
+  </div>
+  <h1>Ballons empoisonnés</h1>
+  <p id="phase-help">Chargement...</p>
+
+  <!-- WRITING PHASE -->
+  <div id="view-writing" class="hidden">
+    <div class="card">
+      <h3 id="writing-title">Écris un gage</h3>
+      <label for="gage-input">Pour le ballon n°<span id="gage-number">1</span></label>
+      <textarea id="gage-input" placeholder="Ex: Imite ton/ta partenaire pendant 1 minute"></textarea>
+      <button class="btn" id="btn-submit-gage">Valider ce gage</button>
+    </div>
+  </div>
+
+  <!-- POISON PHASE -->
+  <div id="view-poison" class="hidden">
+    <div class="card">
+      <h3>Choisis 3 ballons empoisonnés</h3>
+      <p>Ton/ta partenaire ne les voit pas. Elle/il devra deviner en éclatant.</p>
+      <div class="balloon-grid" id="poison-grid"></div>
+      <button class="btn" id="btn-confirm-poison" disabled>Valider mon choix (0/3)</button>
+    </div>
+  </div>
+
+  <!-- PLAYING PHASE -->
+  <div id="view-playing" class="hidden">
+    <div class="balloon-grid" id="play-grid"></div>
+    <div id="reveal-box"></div>
+  </div>
+
+  <!-- FINISHED -->
+  <div id="view-finished" class="hidden">
+    <div class="card" style="text-align:center;">
+      <h2 id="finished-title">Partie terminée</h2>
+      <p>Ballons empoisonnés éclatés par toi : <strong id="my-hits">0</strong></p>
+      <p>Ballons empoisonnés éclatés par ton/ta partenaire : <strong id="their-hits">0</strong></p>
+    </div>
+  </div>
+
+  <button class="btn btn-ghost" id="btn-reset">Nouvelle partie</button>
+</div>
+
+<script type="module">
+import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, updateDoc, onSnapshot } from "./firebase.js";
+import { icon } from "./icons.js";
+import { startDiceDuel } from "./dice.js";
+
+document.getElementById("btn-back").innerHTML = icon("arrowLeft");
+const $ = (id) => document.getElementById(id);
+
+function emptyGame() {
+  return {
+    status: "dice",
+    diceRoll: { a: null, b: null },
+    turn: null,
+    gages: Array(9).fill(null),
+    writerTurnIndex: 0,
+    poisonA: null,
+    poisonB: null,
+    popped: Array(9).fill(false),
+    poppedBy: Array(9).fill(null),
+    hitsA: 0,
+    hitsB: 0,
+    lastReveal: null
+  };
+}
+
+let gameRef, myRole, otherRole, diceOpen = false;
+let mySelection = [];
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  const userSnap = await getDoc(doc(db, "users", user.uid));
+  const userData = userSnap.data();
+  if (!userData || !userData.coupleId) { window.location.href = "index.html"; return; }
+  const coupleSnap = await getDoc(doc(db, "couples", userData.coupleId));
+  const couple = coupleSnap.data();
+  myRole = couple.roles[user.uid];
+  otherRole = myRole === "a" ? "b" : "a";
+
+  gameRef = doc(db, "couples", userData.coupleId, "games", "ballons");
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) await setDoc(gameRef, emptyGame());
+
+  onSnapshot(gameRef, (snap) => render(snap.data()));
+});
+
+function showPhase(name) {
+  ["writing", "poison", "playing", "finished"].forEach(p => $("view-" + p).classList.toggle("hidden", p !== name));
+}
+
+function render(g) {
+  if (!g) return;
+
+  if (g.status === "dice") {
+    $("phase-help").textContent = "Le dé décide qui écrit le premier gage.";
+    $("turn-tag").textContent = "—";
+    showPhase("writing");
+    $("view-writing").classList.add("hidden");
+    if (!diceOpen) {
+      diceOpen = true;
+      startDiceDuel(gameRef, myRole, async (starter) => {
+        diceOpen = false;
+        await updateDoc(gameRef, { status: "writing", turn: starter });
+      });
+    }
+    return;
+  }
+
+  if (g.status === "writing") {
+    showPhase("writing");
+    $("view-writing").classList.remove("hidden");
+    const writerRole = g.writerTurnIndex % 2 === 0
+      ? g.turn
+      : (g.turn === "a" ? "b" : "a");
+    const mine = writerRole === myRole;
+    $("phase-help").textContent = "Neuf gages à inventer ensemble, à tour de rôle, sans savoir sur quel ballon ils tomberont.";
+    $("gage-number").textContent = g.writerTurnIndex + 1;
+    $("turn-tag").className = "turn-tag " + (mine ? "mine" : "theirs");
+    $("turn-tag").textContent = mine ? "À toi d'écrire" : "Son tour d'écrire";
+    $("gage-input").value = "";
+    $("btn-submit-gage").disabled = !mine;
+    return;
+  }
+
+  if (g.status === "poison") {
+    showPhase("poison");
+    $("phase-help").textContent = "Choisissez chacun 3 ballons empoisonnés, en secret.";
+    $("turn-tag").textContent = "Choix secret";
+    $("turn-tag").className = "turn-tag";
+    const myPoison = myRole === "a" ? g.poisonA : g.poisonB;
+    const alreadyDone = !!myPoison;
+
+    $("poison-grid").innerHTML = Array.from({length: 9}).map((_, i) => {
+      const selected = mySelection.includes(i);
+      const cls = ["balloon", alreadyDone ? "" : "selectable", selected ? "selected" : ""].filter(Boolean).join(" ");
+      return `<div class="${cls}" data-i="${i}">${i + 1}</div>`;
+    }).join("");
+
+    if (!alreadyDone) {
+      document.querySelectorAll("#poison-grid .balloon").forEach(el => {
+        el.onclick = () => {
+          const i = parseInt(el.dataset.i, 10);
+          const pos = mySelection.indexOf(i);
+          if (pos >= 0) mySelection.splice(pos, 1);
+          else if (mySelection.length < 3) mySelection.push(i);
+          render(g);
+        };
+      });
+      $("btn-confirm-poison").textContent = `Valider mon choix (${mySelection.length}/3)`;
+      $("btn-confirm-poison").disabled = mySelection.length !== 3;
+      $("btn-confirm-poison").onclick = async () => {
+        const field = myRole === "a" ? "poisonA" : "poisonB";
+        const updated = { [field]: [...mySelection] };
+        const bothReady = (myRole === "a" ? g.poisonB : g.poisonA) != null;
+        if (bothReady) {
+          updated.status = "playing";
+        }
+        await updateDoc(gameRef, updated);
+      };
+    } else {
+      $("phase-help").textContent = "En attente du choix de ton/ta partenaire...";
+    }
+    return;
+  }
+
+  if (g.status === "playing") {
+    showPhase("playing");
+    const mine = g.turn === myRole;
+    $("phase-help").textContent = "Éclate un ballon à ton tour. S'il est empoisonné, le gage s'affiche.";
+    $("turn-tag").className = "turn-tag " + (mine ? "mine" : "theirs");
+    $("turn-tag").textContent = mine ? "Ton tour" : "Son tour";
+
+    $("play-grid").innerHTML = Array.from({length: 9}).map((_, i) => {
+      const popped = g.popped[i];
+      const wasPoison = popped && g.lastReveal && g.lastReveal.index === i && g.lastReveal.wasPoison;
+      const cls = ["balloon", popped ? "popped" : "", wasPoison ? "poison-hit" : ""].filter(Boolean).join(" ");
+      return `<div class="${cls}" data-i="${i}">${popped ? "" : i + 1}</div>`;
+    }).join("");
+
+    document.querySelectorAll("#play-grid .balloon").forEach(el => {
+      const i = parseInt(el.dataset.i, 10);
+      if (!g.popped[i] && mine) {
+        el.onclick = () => popBalloon(i, g);
+      }
+    });
+
+    if (g.lastReveal) {
+      const r = g.lastReveal;
+      if (r.wasPoison) {
+        $("reveal-box").innerHTML = `<div class="gage-text">Ballon empoisonné pour ${r.by === myRole ? "toi" : "ton/ta partenaire"} !<br>${g.gages[r.index]}</div>`;
+      } else {
+        $("reveal-box").innerHTML = `<p style="text-align:center;">Ballon n°${r.index + 1} : rien du tout. Ouf.</p>`;
+      }
+    } else {
+      $("reveal-box").innerHTML = "";
+    }
+    return;
+  }
+
+  if (g.status === "finished") {
+    showPhase("finished");
+    $("phase-help").textContent = "Tous les ballons sont éclatés.";
+    $("turn-tag").className = "turn-tag";
+    $("turn-tag").textContent = "Terminé";
+    $("my-hits").textContent = myRole === "a" ? g.hitsA : g.hitsB;
+    $("their-hits").textContent = myRole === "a" ? g.hitsB : g.hitsA;
+  }
+}
+
+$("btn-submit-gage").onclick = async () => {
+  const text = $("gage-input").value.trim();
+  if (!text) return;
+  const snap = await getDoc(gameRef);
+  const g = snap.data();
+  const gages = [...g.gages];
+  gages[g.writerTurnIndex] = text;
+  const nextIndex = g.writerTurnIndex + 1;
+  const updated = { gages, writerTurnIndex: nextIndex };
+  if (nextIndex >= 9) updated.status = "poison";
+  await updateDoc(gameRef, updated);
+};
+
+async function popBalloon(i, g) {
+  if (g.status !== "playing" || g.turn !== myRole || g.popped[i]) return;
+  const popped = [...g.popped];
+  popped[i] = true;
+  const poppedBy = [...g.poppedBy];
+  poppedBy[i] = myRole;
+
+  const poisonSet = new Set([...(g.poisonA || []), ...(g.poisonB || [])]);
+  const wasPoison = poisonSet.has(i);
+  const hitsA = g.hitsA + (wasPoison && myRole === "a" ? 1 : 0);
+  const hitsB = g.hitsB + (wasPoison && myRole === "b" ? 1 : 0);
+
+  const isFinished = popped.every(Boolean);
+
+  await updateDoc(gameRef, {
+    popped,
+    poppedBy,
+    hitsA,
+    hitsB,
+    lastReveal: { index: i, wasPoison, by: myRole },
+    turn: myRole === "a" ? "b" : "a",
+    status: isFinished ? "finished" : "playing"
+  });
+}
+
+$("btn-reset").onclick = async () => {
+  mySelection = [];
+  await updateDoc(gameRef, emptyGame());
+};
+</script>
+</body>
+</html>

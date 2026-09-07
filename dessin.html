@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dessin à deviner — À Deux</title>
+<meta name="theme-color" content="#171225">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <a class="icon-btn" href="index.html" id="btn-back"></a>
+    <div class="turn-tag" id="turn-tag">—</div>
+  </div>
+  <h1>Dessin à deviner</h1>
+  <p id="phase-help">Chargement...</p>
+
+  <div id="word-banner-wrap" class="hidden">
+    <div class="word-banner" id="word-banner"></div>
+  </div>
+
+  <div id="canvas-block" class="hidden">
+    <div class="canvas-wrap">
+      <canvas id="draw-canvas" width="420" height="420"></canvas>
+    </div>
+    <div class="row" style="margin-top:12px; align-items:center;">
+      <div class="swatches" id="swatches"></div>
+      <button class="icon-btn" id="btn-clear" title="Effacer"></button>
+    </div>
+  </div>
+
+  <div id="guess-block" class="hidden" style="margin-top:14px;">
+    <label for="guess-input">Ta proposition</label>
+    <div class="row">
+      <input type="text" id="guess-input" placeholder="Ce que tu vois...">
+      <button class="btn btn-small" id="btn-guess">Valider</button>
+    </div>
+    <div id="guess-feed" style="margin-top:10px;"></div>
+  </div>
+
+  <div id="found-block" class="hidden card" style="text-align:center; margin-top:14px;">
+    <h2>Trouvé !</h2>
+    <p>Le mot était : <strong id="found-word"></strong></p>
+    <button class="btn" id="btn-next-round">Manche suivante</button>
+  </div>
+
+  <button class="btn btn-ghost" id="btn-reset">Nouvelle partie</button>
+</div>
+
+<script type="module">
+import { auth, onAuthStateChanged, db, doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from "./firebase.js";
+import { icon } from "./icons.js";
+import { startDiceDuel } from "./dice.js";
+import { words } from "./words.js";
+
+document.getElementById("btn-back").innerHTML = icon("arrowLeft");
+document.getElementById("btn-clear").innerHTML = icon("eraser");
+const $ = (id) => document.getElementById(id);
+
+const COLORS = ["#171225", "#c4483a", "#4fc9b8", "#e7b75f", "#3f6fbf"];
+
+function emptyGame() {
+  return {
+    status: "dice",
+    diceRoll: { a: null, b: null },
+    drawerRole: null,
+    strokes: [],
+    guesses: [],
+    found: false,
+    foundWord: null,
+    roundId: 0
+  };
+}
+
+let gameRef, secretRef, myRole, otherRole, myUid, diceOpen = false;
+let currentColor = COLORS[0];
+let drawing = false;
+let currentStroke = null;
+let lastPushedLen = 0;
+
+onAuthStateChanged(auth, async (user) => {
+  if (!user) { window.location.href = "index.html"; return; }
+  myUid = user.uid;
+  const userSnap = await getDoc(doc(db, "users", user.uid));
+  const userData = userSnap.data();
+  if (!userData || !userData.coupleId) { window.location.href = "index.html"; return; }
+  const coupleSnap = await getDoc(doc(db, "couples", userData.coupleId));
+  const couple = coupleSnap.data();
+  myRole = couple.roles[user.uid];
+  otherRole = myRole === "a" ? "b" : "a";
+  const partnerUid = couple.members.find(m => m !== user.uid);
+  window.__partnerUid = partnerUid;
+
+  gameRef = doc(db, "couples", userData.coupleId, "games", "dessin");
+  secretRef = doc(db, "couples", userData.coupleId, "games", "dessin_secret");
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) await setDoc(gameRef, emptyGame());
+
+  setupCanvas();
+  renderSwatches();
+  onSnapshot(gameRef, (snap) => render(snap.data()));
+});
+
+function renderSwatches() {
+  $("swatches").innerHTML = COLORS.map(c =>
+    `<div class="swatch ${c === currentColor ? "active" : ""}" style="background:${c}" data-c="${c}"></div>`
+  ).join("");
+  document.querySelectorAll(".swatch").forEach(s => {
+    s.onclick = () => { currentColor = s.dataset.c; renderSwatches(); };
+  });
+}
+
+function setupCanvas() {
+  const canvas = $("draw-canvas");
+  const ctx = canvas.getContext("2d");
+
+  function pos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    const cy = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+    return { x: (cx / rect.width) * canvas.width, y: (cy / rect.height) * canvas.height };
+  }
+
+  function start(e) {
+    if (!window.__isDrawer) return;
+    e.preventDefault();
+    drawing = true;
+    const p = pos(e);
+    currentStroke = { color: currentColor, points: [p] };
+  }
+  function move(e) {
+    if (!drawing) return;
+    e.preventDefault();
+    const p = pos(e);
+    currentStroke.points.push(p);
+    redrawLocal(window.__lastStrokes || [], currentStroke);
+    pushStrokeThrottled();
+  }
+  function end(e) {
+    if (!drawing) return;
+    drawing = false;
+    if (currentStroke && currentStroke.points.length > 1) {
+      window.__lastStrokes = [...(window.__lastStrokes || []), currentStroke];
+      pushStroke(window.__lastStrokes);
+    }
+    currentStroke = null;
+  }
+
+  canvas.addEventListener("mousedown", start);
+  canvas.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", end);
+  canvas.addEventListener("touchstart", start, { passive: false });
+  canvas.addEventListener("touchmove", move, { passive: false });
+  canvas.addEventListener("touchend", end);
+
+  window.__ctx = ctx;
+  window.__canvas = canvas;
+}
+
+let pushTimer = null;
+function pushStrokeThrottled() {
+  if (pushTimer) return;
+  pushTimer = setTimeout(async () => {
+    pushTimer = null;
+    const preview = [...(window.__lastStrokes || []), currentStroke];
+    await updateDoc(gameRef, { strokes: preview });
+  }, 140);
+}
+async function pushStroke(strokes) {
+  await updateDoc(gameRef, { strokes });
+}
+
+function redrawLocal(strokes, liveStroke) {
+  const ctx = window.__ctx, canvas = window.__canvas;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const all = liveStroke ? [...strokes, liveStroke] : strokes;
+  for (const s of all) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    s.points.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.stroke();
+  }
+}
+
+$("btn-clear").onclick = async () => {
+  if (!window.__isDrawer) return;
+  window.__lastStrokes = [];
+  await updateDoc(gameRef, { strokes: [] });
+};
+
+function render(g) {
+  if (!g) return;
+  window.__lastStrokes = g.strokes || [];
+
+  if (g.status === "dice") {
+    $("phase-help").textContent = "Le dé décide qui dessine en premier.";
+    $("turn-tag").textContent = "—";
+    hideAll();
+    if (!diceOpen) {
+      diceOpen = true;
+      startDiceDuel(gameRef, myRole, async (starter) => {
+        diceOpen = false;
+        await updateDoc(gameRef, { status: "choosing", drawerRole: starter });
+      });
+    }
+    return;
+  }
+
+  const isDrawer = g.drawerRole === myRole;
+  window.__isDrawer = isDrawer && g.status === "drawing";
+
+  if (g.status === "choosing") {
+    hideAll();
+    $("phase-help").textContent = isDrawer ? "Choisis un mot au hasard." : "Ton/ta partenaire choisit un mot...";
+    $("turn-tag").className = "turn-tag " + (isDrawer ? "mine" : "theirs");
+    $("turn-tag").textContent = isDrawer ? "Tu dessines" : "Ton/ta partenaire dessine";
+    if (isDrawer) {
+      pickWordAndStart(g);
+    }
+    return;
+  }
+
+  if (g.status === "drawing") {
+    $("canvas-block").classList.remove("hidden");
+    $("turn-tag").className = "turn-tag " + (isDrawer ? "mine" : "theirs");
+    $("turn-tag").textContent = isDrawer ? "Tu dessines" : "Ton/ta partenaire dessine";
+    redrawLocal(g.strokes || []);
+
+    if (isDrawer) {
+      $("phase-help").textContent = "Dessine le mot ci-dessous, ton/ta partenaire doit deviner.";
+      $("word-banner-wrap").classList.remove("hidden");
+      $("word-banner").textContent = window.__currentWord || "...";
+      $("guess-block").classList.add("hidden");
+      $("found-block").classList.add("hidden");
+    } else {
+      $("phase-help").textContent = "Devine ce que ton/ta partenaire dessine.";
+      $("word-banner-wrap").classList.add("hidden");
+      $("guess-block").classList.remove("hidden");
+      $("found-block").classList.add("hidden");
+      renderGuesses(g);
+    }
+
+    if (isDrawer) checkGuessesAsDrawer(g);
+    return;
+  }
+
+  if (g.status === "found") {
+    hideAll();
+    $("canvas-block").classList.remove("hidden");
+    redrawLocal(g.strokes || []);
+    $("found-block").classList.remove("hidden");
+    $("found-word").textContent = g.foundWord || "";
+    $("phase-help").textContent = "";
+    $("turn-tag").className = "turn-tag";
+    $("turn-tag").textContent = "Manche terminée";
+  }
+}
+
+function hideAll() {
+  $("word-banner-wrap").classList.add("hidden");
+  $("canvas-block").classList.add("hidden");
+  $("guess-block").classList.add("hidden");
+  $("found-block").classList.add("hidden");
+}
+
+async function pickWordAndStart(g) {
+  if (window.__pickedForRound === g.roundId) return;
+  window.__pickedForRound = g.roundId;
+  const word = words[Math.floor(Math.random() * words.length)];
+  window.__currentWord = word;
+  await setDoc(secretRef, { word, drawerUid: myUid, roundId: g.roundId });
+  await updateDoc(gameRef, { status: "drawing", strokes: [], guesses: [] });
+}
+
+function renderGuesses(g) {
+  const list = g.guesses || [];
+  $("guess-feed").innerHTML = list.slice(-5).reverse().map(x =>
+    `<div class="hint">${x.text} — ${x.by === myRole ? "toi" : "partenaire"}</div>`
+  ).join("");
+}
+
+$("btn-guess").onclick = async () => {
+  const text = $("guess-input").value.trim();
+  if (!text) return;
+  const snap = await getDoc(gameRef);
+  const g = snap.data();
+  const guesses = [...(g.guesses || []), { text, by: myRole, at: Date.now() }];
+  await updateDoc(gameRef, { guesses });
+  $("guess-input").value = "";
+};
+
+function normalize(s) {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+}
+
+let lastCheckedCount = 0;
+async function checkGuessesAsDrawer(g) {
+  const guesses = g.guesses || [];
+  if (guesses.length <= lastCheckedCount) return;
+  lastCheckedCount = guesses.length;
+  const secretSnap = await getDoc(secretRef);
+  const secret = secretSnap.data();
+  if (!secret || secret.roundId !== g.roundId) return;
+  const last = guesses[guesses.length - 1];
+  if (normalize(last.text) === normalize(secret.word)) {
+    await updateDoc(gameRef, { status: "found", foundWord: secret.word });
+  }
+}
+
+$("btn-next-round").onclick = async () => {
+  const snap = await getDoc(gameRef);
+  const g = snap.data();
+  const nextDrawer = g.drawerRole === "a" ? "b" : "a";
+  await updateDoc(gameRef, {
+    status: "choosing",
+    drawerRole: nextDrawer,
+    roundId: g.roundId + 1,
+    strokes: [],
+    guesses: [],
+    found: false,
+    foundWord: null
+  });
+  lastCheckedCount = 0;
+};
+
+$("btn-reset").onclick = async () => {
+  lastCheckedCount = 0;
+  window.__pickedForRound = null;
+  await updateDoc(gameRef, emptyGame());
+};
+</script>
+</body>
+</html>

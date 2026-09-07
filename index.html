@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>À Deux — jeux de couple</title>
+<meta name="theme-color" content="#171225">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- AUTH -->
+  <section id="view-auth">
+    <div class="eyebrow">À Deux</div>
+    <h1>Vos soirées jeux, à deux</h1>
+    <p>Connecte-toi pour retrouver ton/ta partenaire et lancer une partie.</p>
+
+    <div class="card">
+      <div class="row" style="margin-bottom:6px;">
+        <button class="btn-ghost btn" id="tab-login">Connexion</button>
+        <button class="btn-ghost btn" id="tab-signup">Créer un compte</button>
+      </div>
+
+      <label for="auth-email">Adresse mail</label>
+      <input type="email" id="auth-email" placeholder="toi@exemple.com" autocomplete="email">
+
+      <label for="auth-pass">Mot de passe</label>
+      <input type="password" id="auth-pass" placeholder="6 caractères minimum" autocomplete="current-password">
+
+      <button class="btn" id="btn-auth-submit">Se connecter</button>
+      <div class="error-msg" id="auth-error"></div>
+    </div>
+  </section>
+
+  <!-- LINK COUPLE -->
+  <section id="view-link" class="hidden">
+    <div class="topbar">
+      <div class="eyebrow" style="margin:0;">À Deux</div>
+      <button class="icon-btn" id="btn-signout" title="Se déconnecter"></button>
+    </div>
+    <h1>Reliez vos comptes</h1>
+    <p>Donne ton code à ton/ta partenaire, ou entre le sien. Une seule liaison suffit, pour toujours.</p>
+
+    <div class="card">
+      <h3>Ton code</h3>
+      <div class="pill-code" id="my-code">------</div>
+      <div class="hint">Partage-le une seule fois, il devient inutile une fois liés.</div>
+    </div>
+
+    <div class="card">
+      <h3>Rejoindre avec son code</h3>
+      <label for="partner-code">Code du/de la partenaire</label>
+      <input type="text" id="partner-code" placeholder="Ex: 7F3KQ9" maxlength="6" style="text-transform:uppercase;">
+      <button class="btn" id="btn-link">Relier nos comptes</button>
+      <div class="error-msg" id="link-error"></div>
+    </div>
+  </section>
+
+  <!-- HOME -->
+  <section id="view-home" class="hidden">
+    <div class="topbar">
+      <div class="who">
+        <span id="home-heart"></span>
+        <span id="partner-email">—</span>
+      </div>
+      <button class="icon-btn" id="btn-signout-2" title="Se déconnecter"></button>
+    </div>
+    <h1>Choisissez un jeu</h1>
+    <p>Le dé décide toujours qui commence.</p>
+
+    <div class="game-grid" id="game-grid"></div>
+  </section>
+
+</div>
+
+<script type="module">
+import { auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "./firebase.js";
+import { ensureUserDoc, listenUserDoc, listenCouple } from "./couple.js";
+import { icon } from "./icons.js";
+
+const $ = (id) => document.getElementById(id);
+let mode = "login";
+let unsubUser = null;
+let unsubCouple = null;
+
+$("home-heart").innerHTML = icon("heart");
+$("btn-signout").innerHTML = icon("signOut");
+$("btn-signout-2").innerHTML = icon("signOut");
+
+$("tab-login").onclick = () => setMode("login");
+$("tab-signup").onclick = () => setMode("signup");
+function setMode(m) {
+  mode = m;
+  $("tab-login").style.background = m === "login" ? "var(--surface-raised)" : "transparent";
+  $("tab-signup").style.background = m === "signup" ? "var(--surface-raised)" : "transparent";
+  $("btn-auth-submit").textContent = m === "login" ? "Se connecter" : "Créer mon compte";
+}
+setMode("login");
+
+$("btn-auth-submit").onclick = async () => {
+  $("auth-error").textContent = "";
+  const email = $("auth-email").value.trim();
+  const pass = $("auth-pass").value;
+  if (!email || !pass) { $("auth-error").textContent = "Renseigne mail et mot de passe."; return; }
+  try {
+    if (mode === "login") {
+      await signInWithEmailAndPassword(auth, email, pass);
+    } else {
+      await createUserWithEmailAndPassword(auth, email, pass);
+    }
+  } catch (e) {
+    $("auth-error").textContent = friendlyError(e.code);
+  }
+};
+
+function friendlyError(code) {
+  const map = {
+    "auth/email-already-in-use": "Ce compte existe déjà, connecte-toi plutôt.",
+    "auth/invalid-email": "Adresse mail invalide.",
+    "auth/weak-password": "Mot de passe trop court (6 caractères minimum).",
+    "auth/invalid-credential": "Mail ou mot de passe incorrect.",
+    "auth/wrong-password": "Mot de passe incorrect."
+  };
+  return map[code] || "Une erreur est survenue, réessaie.";
+}
+
+[$("btn-signout"), $("btn-signout-2")].forEach(b => b.onclick = () => signOut(auth));
+
+$("btn-link").onclick = async () => {
+  $("link-error").textContent = "";
+  const code = $("partner-code").value;
+  if (!code) { $("link-error").textContent = "Entre le code de ton/ta partenaire."; return; }
+  const { linkWithCode } = await import("./couple.js");
+  try {
+    await linkWithCode(auth.currentUser.uid, code);
+  } catch (e) {
+    $("link-error").textContent = e.message;
+  }
+};
+
+const GAMES = [
+  { href: "morpion.html", iconName: "grid", name: "Morpion", desc: "3 à la suite" },
+  { href: "puissance4.html", iconName: "columns", name: "Puissance 4", desc: "4 alignés" },
+  { href: "ballons.html", iconName: "balloon", name: "Ballons empoisonnés", desc: "Gages cachés" },
+  { href: "dessin.html", iconName: "pencil", name: "Dessin à deviner", desc: "300 mots" }
+];
+
+function renderGrid() {
+  $("game-grid").innerHTML = GAMES.map(g => `
+    <a class="game-tile" href="${g.href}">
+      ${icon(g.iconName)}
+      <span>${g.name}</span>
+      <small>${g.desc}</small>
+    </a>
+  `).join("");
+}
+renderGrid();
+
+function showView(name) {
+  ["auth", "link", "home"].forEach(v => $("view-" + v).classList.toggle("hidden", v !== name));
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+}
+
+onAuthStateChanged(auth, async (user) => {
+  if (unsubUser) unsubUser();
+  if (unsubCouple) unsubCouple();
+
+  if (!user) { showView("auth"); return; }
+
+  await ensureUserDoc(user);
+
+  unsubUser = listenUserDoc(user.uid, (userData) => {
+    if (!userData) return;
+    if (!userData.coupleId) {
+      $("my-code").textContent = userData.inviteCode;
+      showView("link");
+      if (unsubCouple) { unsubCouple(); unsubCouple = null; }
+      return;
+    }
+    if (unsubCouple) unsubCouple();
+    unsubCouple = listenCouple(userData.coupleId, (couple) => {
+      if (!couple) return;
+      showView("home");
+      const partnerUid = couple.members.find(m => m !== user.uid);
+      import("./firebase.js").then(async ({ db, doc, getDoc }) => {
+        const snap = await getDoc(doc(db, "users", partnerUid));
+        $("partner-email").textContent = snap.exists() ? snap.data().email : "Partenaire";
+      });
+    });
+  });
+});
+</script>
+</body>
+</html>
