@@ -9,7 +9,7 @@ export function startDiceDuel(gameRef, myRole, onStarter) {
   overlay.innerHTML = `
     <div class="dice-panel">
       <h2>Qui commence ?</h2>
-      <p>Lancez le dé chacun votre tour. Le plus gros score démarre la partie.</p>
+      <p>Le plus gros score démarre.</p>
       <div class="dice-faces">
         <div>
           <div class="die mine" id="die-mine">?</div>
@@ -32,24 +32,38 @@ export function startDiceDuel(gameRef, myRole, onStarter) {
   const dieTheirs = overlay.querySelector("#die-theirs");
   const otherRole = myRole === "a" ? "b" : "a";
 
+  let seenMine = false, seenTheirs = false;
+
+  function flash(el) {
+    el.classList.remove("pop");
+    // force reflow pour rejouer l'animation
+    void el.offsetWidth;
+    el.classList.add("pop");
+  }
+
   let unsub = onSnapshot(gameRef, async (snap) => {
     const data = snap.data();
     if (!data) return;
     const roll = data.diceRoll || {};
+
     dieMine.textContent = roll[myRole] ?? "?";
     dieTheirs.textContent = roll[otherRole] ?? "?";
+
+    if (roll[myRole] != null && !seenMine) { seenMine = true; flash(dieMine); }
+    if (roll[otherRole] != null && !seenTheirs) { seenTheirs = true; flash(dieTheirs); }
 
     rollBtn.disabled = roll[myRole] != null;
 
     if (roll.a != null && roll.b != null) {
       if (roll.a === roll.b) {
-        status.textContent = "Égalité ! On relance dans un instant...";
+        status.textContent = "Égalité ! On relance...";
+        seenMine = false; seenTheirs = false;
         if (myRole === "a") {
-          setTimeout(() => updateDoc(gameRef, { diceRoll: { a: null, b: null } }), 1400);
+          setTimeout(() => updateDoc(gameRef, { diceRoll: { a: null, b: null } }), 1100);
         }
       } else {
         const starter = roll.a > roll.b ? "a" : "b";
-        status.textContent = starter === myRole ? "Tu commences !" : "C'est ton/ta partenaire qui commence.";
+        status.textContent = starter === myRole ? "Tu commences !" : "Ton/ta partenaire commence.";
         setTimeout(async () => {
           unsub();
           overlay.remove();
@@ -57,17 +71,28 @@ export function startDiceDuel(gameRef, myRole, onStarter) {
             await updateDoc(gameRef, { diceRoll: { a: null, b: null } });
           }
           onStarter(starter);
-        }, 1200);
+        }, 1000);
       }
     } else if (roll[myRole] != null) {
-      status.textContent = "En attente du lancer de ton/ta partenaire...";
+      status.textContent = "En attente de ton/ta partenaire...";
     }
   });
 
   rollBtn.onclick = async () => {
     rollBtn.disabled = true;
+    dieMine.classList.add("rolling");
+    status.textContent = "Lancer en cours...";
+
+    const spin = setInterval(() => {
+      dieMine.textContent = 1 + Math.floor(Math.random() * 6);
+    }, 70);
+
+    await new Promise((r) => setTimeout(r, 500));
+    clearInterval(spin);
+    dieMine.classList.remove("rolling");
+
     const value = 1 + Math.floor(Math.random() * 6);
-    // Realtime Database : chemin imbriqué avec "/" (et non "." comme Firestore).
+    dieMine.textContent = value;
     const field = `diceRoll/${myRole}`;
     await updateDoc(gameRef, { [field]: value });
   };
