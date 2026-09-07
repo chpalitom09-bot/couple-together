@@ -88,6 +88,7 @@ export async function getDocs(q) {
 
 export {
   ref,
+  get,
   set,
   update,
   runTransaction,
