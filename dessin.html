@@ -24,9 +24,17 @@
     <div class="canvas-wrap">
       <canvas id="draw-canvas" width="420" height="420"></canvas>
     </div>
-    <div class="row" style="margin-top:12px; align-items:center;">
+
+    <div class="draw-toolbar">
       <div class="swatches" id="swatches"></div>
+      <input type="color" id="color-picker" value="#171225" title="Choisir une couleur">
       <button class="icon-btn" id="btn-clear" title="Effacer"></button>
+    </div>
+
+    <div class="size-row">
+      <span class="hint" style="margin:0;">Épaisseur</span>
+      <input type="range" id="size-slider" min="1" max="40" value="5">
+      <div class="size-preview" id="size-preview"></div>
     </div>
   </div>
 
@@ -58,7 +66,7 @@ document.getElementById("btn-back").innerHTML = icon("arrowLeft");
 document.getElementById("btn-clear").innerHTML = icon("eraser");
 const $ = (id) => document.getElementById(id);
 
-const COLORS = ["#171225", "#c4483a", "#4fc9b8", "#e7b75f", "#3f6fbf"];
+const QUICK_COLORS = ["#171225", "#f3eee4", "#c4483a", "#4fc9b8", "#e7b75f", "#3f6fbf", "#7a4fc9", "#4fc96b"];
 
 function emptyGame() {
   return {
@@ -74,10 +82,10 @@ function emptyGame() {
 }
 
 let gameRef, secretRef, myRole, otherRole, myUid, diceOpen = false;
-let currentColor = COLORS[0];
+let currentColor = QUICK_COLORS[0];
+let currentSize = 5;
 let drawing = false;
 let currentStroke = null;
-let lastPushedLen = 0;
 
 onAuthStateChanged(auth, async (user) => {
   if (!user) { window.location.href = "index.html"; return; }
@@ -98,16 +106,47 @@ onAuthStateChanged(auth, async (user) => {
   if (!gameSnap.exists()) await setDoc(gameRef, emptyGame());
 
   setupCanvas();
-  renderSwatches();
+  setupToolbar();
   onSnapshot(gameRef, (snap) => render(snap.data()));
 });
 
+function setupToolbar() {
+  renderSwatches();
+
+  $("color-picker").value = currentColor;
+  $("color-picker").oninput = (e) => {
+    currentColor = e.target.value;
+    renderSwatches();
+    updateSizePreview();
+  };
+
+  $("size-slider").value = currentSize;
+  $("size-slider").oninput = (e) => {
+    currentSize = parseInt(e.target.value, 10);
+    updateSizePreview();
+  };
+  updateSizePreview();
+}
+
+function updateSizePreview() {
+  const preview = $("size-preview");
+  const d = Math.max(4, Math.min(36, currentSize));
+  preview.style.width = d + "px";
+  preview.style.height = d + "px";
+  preview.style.background = currentColor;
+}
+
 function renderSwatches() {
-  $("swatches").innerHTML = COLORS.map(c =>
+  $("swatches").innerHTML = QUICK_COLORS.map(c =>
     `<div class="swatch ${c === currentColor ? "active" : ""}" style="background:${c}" data-c="${c}"></div>`
   ).join("");
   document.querySelectorAll(".swatch").forEach(s => {
-    s.onclick = () => { currentColor = s.dataset.c; renderSwatches(); };
+    s.onclick = () => {
+      currentColor = s.dataset.c;
+      $("color-picker").value = currentColor;
+      renderSwatches();
+      updateSizePreview();
+    };
   });
 }
 
@@ -127,7 +166,7 @@ function setupCanvas() {
     e.preventDefault();
     drawing = true;
     const p = pos(e);
-    currentStroke = { color: currentColor, points: [p] };
+    currentStroke = { color: currentColor, size: currentSize, points: [p] };
   }
   function move(e) {
     if (!drawing) return;
@@ -177,7 +216,7 @@ function redrawLocal(strokes, liveStroke) {
   const all = liveStroke ? [...strokes, liveStroke] : strokes;
   for (const s of all) {
     ctx.strokeStyle = s.color;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = s.size || 5;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
