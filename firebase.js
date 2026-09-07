@@ -25,7 +25,6 @@ const firebaseConfig = {
   apiKey: "AIzaSyBHjH-pL8-e7ltOn6SpEYgbmAcSpwS12Yo",
   authDomain: "couple-together-e6ed3.firebaseapp.com",
   projectId: "couple-together-e6ed3",
-  // À vérifier/ajuster dans la console Firebase (Realtime Database → onglet Données).
   databaseURL: "https://couple-together-e6ed3-default-rtdb.firebaseio.com",
   storageBucket: "couple-together-e6ed3.firebasestorage.app",
   messagingSenderId: "493218381649",
