@@ -1,7 +1,4 @@
-import {
-  db, doc, getDoc, setDoc, updateDoc, onSnapshot,
-  collection, query, where, getDocs, serverTimestamp, runTransaction
-} from "./firebase.js";
+import { db, ref, get, set, update, onSnapshot, query, where, collection, getDocs, serverTimestamp, runTransaction, doc, setDoc, getDoc } from "./firebase.js";
 
 function randomCode(len = 6) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans caractères ambigus
@@ -10,18 +7,18 @@ function randomCode(len = 6) {
   return out;
 }
 
-// Crée le document utilisateur au premier login, avec son propre code de parrainage.
+// Crée le nœud utilisateur au premier login, avec son propre code de parrainage.
 export async function ensureUserDoc(user) {
-  const ref = doc(db, "users", user.uid);
-  const snap = await getDoc(ref);
-  if (snap.exists()) return snap.data();
+  const uref = ref(db, `users/${user.uid}`);
+  const snap = await get(uref);
+  if (snap.exists()) return snap.val();
   const data = {
     email: user.email,
     inviteCode: randomCode(),
     coupleId: null,
     createdAt: serverTimestamp()
   };
-  await setDoc(ref, data);
+  await set(uref, data);
   return data;
 }
 
@@ -47,19 +44,27 @@ export async function linkWithCode(myUid, code) {
 
   const coupleId = [myUid, partnerUid].sort().join("_");
 
-  await runTransaction(db, async (tx) => {
-    const myRef = doc(db, "users", myUid);
-    const partnerRef = doc(db, "users", partnerUid);
-    const myFresh = await tx.get(myRef);
-    if (myFresh.data().coupleId) throw new Error("Tu es déjà en couple avec quelqu'un.");
+  // Réservation atomique : chaque compte ne peut être lié qu'une seule fois.
+  // (Realtime Database ne fait des transactions que sur un seul chemin à la fois,
+  // donc on réserve le champ coupleId de chacun l'un après l'autre.)
+  const myCoupleRef = ref(db, `users/${myUid}/coupleId`);
+  const myTx = await runTransaction(myCoupleRef, (current) => (current ? undefined : coupleId));
+  if (!myTx.committed) throw new Error("Tu es déjà en couple avec quelqu'un.");
 
-    tx.set(doc(db, "couples", coupleId), {
+  const partnerCoupleRef = ref(db, `users/${partnerUid}/coupleId`);
+  const partnerTx = await runTransaction(partnerCoupleRef, (current) => (current ? undefined : coupleId));
+  if (!partnerTx.committed) {
+    await set(myCoupleRef, null); // on annule notre propre réservation
+    throw new Error("Cette personne est déjà en couple avec quelqu'un.");
+  }
+
+  await update(ref(db), {
+    [`couples/${coupleId}`]: {
       members: [myUid, partnerUid].sort(),
       roles: { [myUid]: "a", [partnerUid]: "b" },
       createdAt: serverTimestamp()
-    });
-    tx.update(myRef, { coupleId, inviteCode: randomCode() });
-    tx.update(partnerRef, { coupleId, inviteCode: randomCode() });
+    },
+    [`users/${myUid}/inviteCode`]: randomCode()
   });
 
   return coupleId;
