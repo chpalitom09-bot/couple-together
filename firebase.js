@@ -36,6 +36,38 @@ export const auth = getAuth(app);
 export const db = getDatabase(app);
 
 // ---------------------------------------------------------------------------
+// Realtime Database supprime silencieusement tout champ valant `null`
+// (contrairement à Firestore, qui le stocke tel quel). Comme tout le projet
+// utilise `null` comme valeur de "case vide" (board[i]=null, turn:null,
+// gages:Array(9).fill(null), diceRoll:{a:null,b:null}...), on encode ces
+// `null` en un marqueur avant d'écrire, et on les décode à la lecture.
+// Totalement transparent pour tous les autres fichiers.
+// ---------------------------------------------------------------------------
+const NULL_MARKER = "\u0000NULL\u0000";
+
+function encodeNulls(value) {
+  if (value === null) return NULL_MARKER;
+  if (Array.isArray(value)) return value.map(encodeNulls);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k in value) out[k] = encodeNulls(value[k]);
+    return out;
+  }
+  return value;
+}
+
+function decodeNulls(value) {
+  if (value === NULL_MARKER) return null;
+  if (Array.isArray(value)) return value.map(decodeNulls);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const k in value) out[k] = decodeNulls(value[k]);
+    return out;
+  }
+  return value;
+}
+
+// ---------------------------------------------------------------------------
 // Couche de compatibilité : imite l'API Firestore utilisée dans le reste du
 // projet pour ne pas avoir à réécrire morpion.html / puissance4.html /
 // ballons.html / dessin.html.
@@ -53,17 +85,22 @@ export function collection(_db, path) {
 // Imite un DocumentSnapshot Firestore : exists() / data() / id
 export async function getDoc(reference) {
   const snap = await get(reference);
-  return { exists: () => snap.exists(), data: () => snap.val(), id: reference.key };
+  return { exists: () => snap.exists(), data: () => decodeNulls(snap.val()), id: reference.key };
 }
 
-export const setDoc = set;
-export const updateDoc = update;
+export function setDoc(reference, data) {
+  return set(reference, encodeNulls(data));
+}
+
+export function updateDoc(reference, data) {
+  return update(reference, encodeNulls(data));
+}
 
 // onSnapshot(ref, cb) -> cb reçoit un objet { exists(), data(), id } à chaque
 // changement. onValue renvoie déjà la fonction de désabonnement.
 export function onSnapshot(reference, cb) {
   return onValue(reference, (snap) => {
-    cb({ exists: () => snap.exists(), data: () => snap.val(), id: reference.key });
+    cb({ exists: () => snap.exists(), data: () => decodeNulls(snap.val()), id: reference.key });
   });
 }
 
@@ -81,7 +118,7 @@ export function query(baseRef, ...constraints) {
 export async function getDocs(q) {
   const snap = await get(q);
   const docs = [];
-  snap.forEach((child) => docs.push({ id: child.key, data: () => child.val() }));
+  snap.forEach((child) => docs.push({ id: child.key, data: () => decodeNulls(child.val()) }));
   return { empty: docs.length === 0, docs };
 }
 
