@@ -67,7 +67,8 @@ export function startDiceDuel(gameRef, myRole, onStarter) {
   rollBtn.onclick = async () => {
     rollBtn.disabled = true;
     const value = 1 + Math.floor(Math.random() * 6);
-    const field = `diceRoll.${myRole}`;
+    // Realtime Database : chemin imbriqué avec "/" (et non "." comme Firestore).
+    const field = `diceRoll/${myRole}`;
     await updateDoc(gameRef, { [field]: value });
   };
 }
