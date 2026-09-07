@@ -1,13 +1,12 @@
 import { db, ref, get, set, update, onSnapshot, query, where, collection, getDocs, serverTimestamp, runTransaction, doc, setDoc, getDoc } from "./firebase.js";
 
 function randomCode(len = 6) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // sans caractères ambigus
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
   for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
 }
 
-// Crée le nœud utilisateur au premier login, avec son propre code de parrainage.
 export async function ensureUserDoc(user) {
   const uref = ref(db, `users/${user.uid}`);
   const snap = await get(uref);
@@ -30,7 +29,6 @@ export function listenCouple(coupleId, cb) {
   return onSnapshot(doc(db, "couples", coupleId), (snap) => cb(snap.exists() ? snap.data() : null));
 }
 
-// Utilise le code du/de la partenaire pour créer le couple. Le code devient invalide ensuite.
 export async function linkWithCode(myUid, code) {
   const cleanCode = code.trim().toUpperCase();
   const q = query(collection(db, "users"), where("inviteCode", "==", cleanCode));
@@ -44,9 +42,6 @@ export async function linkWithCode(myUid, code) {
 
   const coupleId = [myUid, partnerUid].sort().join("_");
 
-  // Réservation atomique : chaque compte ne peut être lié qu'une seule fois.
-  // (Realtime Database ne fait des transactions que sur un seul chemin à la fois,
-  // donc on réserve le champ coupleId de chacun l'un après l'autre.)
   const myCoupleRef = ref(db, `users/${myUid}/coupleId`);
   const myTx = await runTransaction(myCoupleRef, (current) => (current ? undefined : coupleId));
   if (!myTx.committed) throw new Error("Tu es déjà en couple avec quelqu'un.");
@@ -54,7 +49,7 @@ export async function linkWithCode(myUid, code) {
   const partnerCoupleRef = ref(db, `users/${partnerUid}/coupleId`);
   const partnerTx = await runTransaction(partnerCoupleRef, (current) => (current ? undefined : coupleId));
   if (!partnerTx.committed) {
-    await set(myCoupleRef, null); // on annule notre propre réservation
+    await set(myCoupleRef, null);
     throw new Error("Cette personne est déjà en couple avec quelqu'un.");
   }
 
