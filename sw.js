@@ -1,4 +1,4 @@
-const CACHE = "a-deux-v1";
+const CACHE = "a-deux-v2";
 const SHELL = [
   "./index.html",
   "./morpion.html",
@@ -28,10 +28,10 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Réseau d'abord pour tout ce qui touche Firebase (temps réel), cache pour le reste.
+// Réseau d'abord pour tout ce qui touche Realtime Database (temps réel), cache pour le reste.
 self.addEventListener("fetch", (event) => {
   const url = event.request.url;
-  if (url.includes("firestore") || url.includes("googleapis") || url.includes("gstatic")) {
+  if (url.includes("firebaseio.com") || url.includes("firebasedatabase.app") || url.includes("googleapis") || url.includes("gstatic")) {
     return; // laisse passer normalement, pas de cache sur le temps réel
   }
   event.respondWith(
