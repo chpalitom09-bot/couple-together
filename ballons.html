@@ -19,18 +19,18 @@
   <!-- WRITING PHASE -->
   <div id="view-writing" class="hidden">
     <div class="card">
-      <h3 id="writing-title">Écris un gage</h3>
-      <label for="gage-input">Pour le ballon n°<span id="gage-number">1</span></label>
-      <textarea id="gage-input" placeholder="Ex: Imite ton/ta partenaire pendant 1 minute"></textarea>
-      <button class="btn" id="btn-submit-gage">Valider ce gage</button>
+      <h3>Écris ta phrase secrète</h3>
+      <p style="margin-bottom:0;">Elle sera révélée seulement si ton/ta partenaire trouve tes 3 ballons empoisonnés.</p>
+      <textarea id="gage-input" placeholder="Ex: Ma plus grande peur, c'est..."></textarea>
+      <button class="btn" id="btn-submit-gage">Valider ma phrase</button>
     </div>
   </div>
 
   <!-- POISON PHASE -->
   <div id="view-poison" class="hidden">
     <div class="card">
-      <h3>Choisis 3 ballons empoisonnés</h3>
-      <p>Ton/ta partenaire ne les voit pas. Elle/il devra deviner en éclatant.</p>
+      <h3>Choisis 3 de tes ballons à empoisonner</h3>
+      <p>Ton/ta partenaire ne les voit pas. Iel devra deviner en éclatant.</p>
       <div class="balloon-grid" id="poison-grid"></div>
       <button class="btn" id="btn-confirm-poison" disabled>Valider mon choix (0/3)</button>
     </div>
@@ -38,16 +38,32 @@
 
   <!-- PLAYING PHASE -->
   <div id="view-playing" class="hidden">
-    <div class="balloon-grid" id="play-grid"></div>
+    <div class="card">
+      <h3>Ton plateau</h3>
+      <div class="balloon-grid" id="my-grid"></div>
+      <div id="my-phrase-box"></div>
+    </div>
+    <div class="card">
+      <h3 id="their-board-title">Plateau du/de la partenaire</h3>
+      <div class="balloon-grid" id="their-grid"></div>
+      <div id="their-phrase-box"></div>
+    </div>
     <div id="reveal-box"></div>
   </div>
 
   <!-- FINISHED -->
   <div id="view-finished" class="hidden">
     <div class="card" style="text-align:center;">
-      <h2 id="finished-title">Partie terminée</h2>
-      <p>Ballons empoisonnés éclatés par toi : <strong id="my-hits">0</strong></p>
-      <p>Ballons empoisonnés éclatés par ton/ta partenaire : <strong id="their-hits">0</strong></p>
+      <h2>Partie terminée</h2>
+      <p>Les deux phrases ont été révélées, jetez-y un œil ci-dessus avant de relancer.</p>
+    </div>
+    <div class="card">
+      <h3>Ta phrase</h3>
+      <div class="gage-text" id="final-my-phrase"></div>
+    </div>
+    <div class="card">
+      <h3 id="final-their-title">Phrase du/de la partenaire</h3>
+      <div class="gage-text" id="final-their-phrase"></div>
     </div>
   </div>
 
@@ -67,14 +83,16 @@ function emptyGame() {
     status: "dice",
     diceRoll: { a: null, b: null },
     turn: null,
-    gages: Array(9).fill(null),
-    writerTurnIndex: 0,
+    phraseA: null,
+    phraseB: null,
     poisonA: null,
     poisonB: null,
-    popped: Array(9).fill(false),
-    poppedBy: Array(9).fill(null),
+    poppedA: Array(9).fill(false),
+    poppedB: Array(9).fill(false),
     hitsA: 0,
     hitsB: 0,
+    revealedA: false,
+    revealedB: false,
     lastReveal: null
   };
 }
@@ -103,11 +121,16 @@ function showPhase(name) {
   ["writing", "poison", "playing", "finished"].forEach(p => $("view-" + p).classList.toggle("hidden", p !== name));
 }
 
+function field(role, base) {
+  // "phrase" + "A"/"B", "poison" + "A"/"B", etc.
+  return base + (role === "a" ? "A" : "B");
+}
+
 function render(g) {
   if (!g) return;
 
   if (g.status === "dice") {
-    $("phase-help").textContent = "Le dé décide qui écrit le premier gage.";
+    $("phase-help").textContent = "Le dé décide qui commence à éclater en premier.";
     $("turn-tag").textContent = "—";
     showPhase("writing");
     $("view-writing").classList.add("hidden");
@@ -124,25 +147,23 @@ function render(g) {
   if (g.status === "writing") {
     showPhase("writing");
     $("view-writing").classList.remove("hidden");
-    const writerRole = g.writerTurnIndex % 2 === 0
-      ? g.turn
-      : (g.turn === "a" ? "b" : "a");
-    const mine = writerRole === myRole;
-    $("phase-help").textContent = "Neuf gages à inventer ensemble, à tour de rôle, sans savoir sur quel ballon ils tomberont.";
-    $("gage-number").textContent = g.writerTurnIndex + 1;
-    $("turn-tag").className = "turn-tag " + (mine ? "mine" : "theirs");
-    $("turn-tag").textContent = mine ? "À toi d'écrire" : "Son tour d'écrire";
-    $("gage-input").value = "";
+    const myPhrase = g[field(myRole, "phrase")];
+    const mine = !myPhrase;
+    $("phase-help").textContent = "Chacun·e écrit sa propre phrase secrète, en même temps.";
+    $("turn-tag").className = "turn-tag";
+    $("turn-tag").textContent = mine ? "À toi d'écrire" : "En attente de ton/ta partenaire";
     $("btn-submit-gage").disabled = !mine;
+    $("gage-input").disabled = !mine;
+    if (!mine) $("gage-input").value = "";
     return;
   }
 
   if (g.status === "poison") {
     showPhase("poison");
-    $("phase-help").textContent = "Choisissez chacun 3 ballons empoisonnés, en secret.";
+    $("phase-help").textContent = "Choisis 3 de tes propres ballons à empoisonner, en secret.";
     $("turn-tag").textContent = "Choix secret";
     $("turn-tag").className = "turn-tag";
-    const myPoison = myRole === "a" ? g.poisonA : g.poisonB;
+    const myPoison = g[field(myRole, "poison")];
     const alreadyDone = !!myPoison;
 
     $("poison-grid").innerHTML = Array.from({length: 9}).map((_, i) => {
@@ -164,12 +185,10 @@ function render(g) {
       $("btn-confirm-poison").textContent = `Valider mon choix (${mySelection.length}/3)`;
       $("btn-confirm-poison").disabled = mySelection.length !== 3;
       $("btn-confirm-poison").onclick = async () => {
-        const field = myRole === "a" ? "poisonA" : "poisonB";
-        const updated = { [field]: [...mySelection] };
-        const bothReady = (myRole === "a" ? g.poisonB : g.poisonA) != null;
-        if (bothReady) {
-          updated.status = "playing";
-        }
+        const key = field(myRole, "poison");
+        const updated = { [key]: [...mySelection] };
+        const otherReady = g[field(otherRole, "poison")] != null;
+        if (otherReady) updated.status = "playing";
         await updateDoc(gameRef, updated);
       };
     } else {
@@ -181,28 +200,54 @@ function render(g) {
   if (g.status === "playing") {
     showPhase("playing");
     const mine = g.turn === myRole;
-    $("phase-help").textContent = "Éclate un ballon à ton tour. S'il est empoisonné, le gage s'affiche.";
+    $("phase-help").textContent = mine
+      ? "Éclate un ballon sur le plateau du/de la partenaire."
+      : "Ton/ta partenaire éclate un ballon sur ton plateau.";
     $("turn-tag").className = "turn-tag " + (mine ? "mine" : "theirs");
     $("turn-tag").textContent = mine ? "Ton tour" : "Son tour";
 
-    $("play-grid").innerHTML = Array.from({length: 9}).map((_, i) => {
-      const popped = g.popped[i];
-      const wasPoison = popped && g.lastReveal && g.lastReveal.index === i && g.lastReveal.wasPoison;
+    // Mon plateau : lecture seule, montre ce que le/la partenaire a éclaté chez moi.
+    const myPopped = g[field(myRole, "popped")];
+    $("my-grid").innerHTML = Array.from({length: 9}).map((_, i) => {
+      const popped = myPopped[i];
+      const wasPoison = popped && g.lastReveal && g.lastReveal.board === myRole && g.lastReveal.index === i && g.lastReveal.wasPoison;
+      const cls = ["balloon", popped ? "popped" : "", wasPoison ? "poison-hit" : ""].filter(Boolean).join(" ");
+      return `<div class="${cls}">${popped ? "" : i + 1}</div>`;
+    }).join("");
+
+    if (g[field(myRole, "revealed")]) {
+      $("my-phrase-box").innerHTML = `<div class="gage-text">${g[field(myRole, "phrase")]}</div>`;
+    } else {
+      $("my-phrase-box").innerHTML = `<p class="hint" style="text-align:center;">${g.hitsA !== undefined ? "" : ""}Ballons empoisonnés trouvés chez toi : ${g[field(myRole, "hits")]}/3</p>`;
+    }
+
+    // Plateau du/de la partenaire : cliquable si c'est mon tour.
+    const theirPopped = g[field(otherRole, "popped")];
+    $("their-grid").innerHTML = Array.from({length: 9}).map((_, i) => {
+      const popped = theirPopped[i];
+      const wasPoison = popped && g.lastReveal && g.lastReveal.board === otherRole && g.lastReveal.index === i && g.lastReveal.wasPoison;
       const cls = ["balloon", popped ? "popped" : "", wasPoison ? "poison-hit" : ""].filter(Boolean).join(" ");
       return `<div class="${cls}" data-i="${i}">${popped ? "" : i + 1}</div>`;
     }).join("");
 
-    document.querySelectorAll("#play-grid .balloon").forEach(el => {
+    document.querySelectorAll("#their-grid .balloon").forEach(el => {
       const i = parseInt(el.dataset.i, 10);
-      if (!g.popped[i] && mine) {
+      if (!theirPopped[i] && mine) {
         el.onclick = () => popBalloon(i, g);
       }
     });
 
+    if (g[field(otherRole, "revealed")]) {
+      $("their-phrase-box").innerHTML = `<div class="gage-text">${g[field(otherRole, "phrase")]}</div>`;
+    } else {
+      $("their-phrase-box").innerHTML = `<p class="hint" style="text-align:center;">Ballons empoisonnés trouvés : ${g[field(otherRole, "hits")]}/3</p>`;
+    }
+
     if (g.lastReveal) {
       const r = g.lastReveal;
+      const boardOwnerIsMe = r.board === myRole;
       if (r.wasPoison) {
-        $("reveal-box").innerHTML = `<div class="gage-text">Ballon empoisonné pour ${r.by === myRole ? "toi" : "ton/ta partenaire"} !<br>${g.gages[r.index]}</div>`;
+        $("reveal-box").innerHTML = `<p style="text-align:center;">Empoisonné ! (ballon n°${r.index + 1}, ${boardOwnerIsMe ? "chez toi" : "chez ton/ta partenaire"})</p>`;
       } else {
         $("reveal-box").innerHTML = `<p style="text-align:center;">Ballon n°${r.index + 1} : rien du tout. Ouf.</p>`;
       }
@@ -214,11 +259,11 @@ function render(g) {
 
   if (g.status === "finished") {
     showPhase("finished");
-    $("phase-help").textContent = "Tous les ballons sont éclatés.";
+    $("phase-help").textContent = "Les deux plateaux sont résolus.";
     $("turn-tag").className = "turn-tag";
     $("turn-tag").textContent = "Terminé";
-    $("my-hits").textContent = myRole === "a" ? g.hitsA : g.hitsB;
-    $("their-hits").textContent = myRole === "a" ? g.hitsB : g.hitsA;
+    $("final-my-phrase").textContent = g[field(myRole, "phrase")];
+    $("final-their-phrase").textContent = g[field(otherRole, "phrase")];
   }
 }
 
@@ -227,37 +272,39 @@ $("btn-submit-gage").onclick = async () => {
   if (!text) return;
   const snap = await getDoc(gameRef);
   const g = snap.data();
-  const gages = [...g.gages];
-  gages[g.writerTurnIndex] = text;
-  const nextIndex = g.writerTurnIndex + 1;
-  const updated = { gages, writerTurnIndex: nextIndex };
-  if (nextIndex >= 9) updated.status = "poison";
+  const key = field(myRole, "phrase");
+  const updated = { [key]: text };
+  const otherWritten = g[field(otherRole, "phrase")] != null;
+  if (otherWritten) updated.status = "poison";
   await updateDoc(gameRef, updated);
 };
 
 async function popBalloon(i, g) {
-  if (g.status !== "playing" || g.turn !== myRole || g.popped[i]) return;
-  const popped = [...g.popped];
+  if (g.status !== "playing" || g.turn !== myRole) return;
+  const poppedKey = field(otherRole, "popped");
+  const popped = [...g[poppedKey]];
+  if (popped[i]) return;
   popped[i] = true;
-  const poppedBy = [...g.poppedBy];
-  poppedBy[i] = myRole;
 
-  const poisonSet = new Set([...(g.poisonA || []), ...(g.poisonB || [])]);
-  const wasPoison = poisonSet.has(i);
-  const hitsA = g.hitsA + (wasPoison && myRole === "a" ? 1 : 0);
-  const hitsB = g.hitsB + (wasPoison && myRole === "b" ? 1 : 0);
+  const poisonArr = g[field(otherRole, "poison")] || [];
+  const wasPoison = poisonArr.includes(i);
+  const hitsKey = field(otherRole, "hits");
+  const newHits = g[hitsKey] + (wasPoison ? 1 : 0);
+  const revealedKey = field(otherRole, "revealed");
+  const nowRevealed = newHits >= 3;
 
-  const isFinished = popped.every(Boolean);
+  const updated = {
+    [poppedKey]: popped,
+    [hitsKey]: newHits,
+    lastReveal: { board: otherRole, index: i, wasPoison },
+    turn: myRole === "a" ? "b" : "a"
+  };
+  if (nowRevealed) updated[revealedKey] = true;
 
-  await updateDoc(gameRef, {
-    popped,
-    poppedBy,
-    hitsA,
-    hitsB,
-    lastReveal: { index: i, wasPoison, by: myRole },
-    turn: myRole === "a" ? "b" : "a",
-    status: isFinished ? "finished" : "playing"
-  });
+  const myBoardAlreadyRevealed = g[field(myRole, "revealed")];
+  if (nowRevealed && myBoardAlreadyRevealed) updated.status = "finished";
+
+  await updateDoc(gameRef, updated);
 }
 
 $("btn-reset").onclick = async () => {
