@@ -1,4 +1,4 @@
-const CACHE = "coucou2";
+const CACHE = "coucou3";
 const SHELL = [
   "./index.html",
   "./morpion.html",
